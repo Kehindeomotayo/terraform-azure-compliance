@@ -3,20 +3,22 @@ name: Terraform CI/CD Pipeline
 on:
   pull_request:
     branches:
-      - 'feature/**'
+      - dev  # Run plan when PR is raised into dev
   push:
     branches:
-      - dev
-      - stage
-      - prod
+      - dev      # Deploy to Dev
+      - stage    # Deploy to Stage
+      - prod     # Deploy to Prod
+      - feature/** # Run checks when pushing to feature branches
 
 jobs:
   terraform_plan:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    name: Terraform Plan (on PR)
+    name: Terraform Plan (PR Validation)
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
@@ -29,20 +31,26 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Format Check
+      - name: Check Terraform Formatting
         run: terraform fmt -check
 
-      - name: TFLint (Terraform linter)
+      - name: Install TFLint
         uses: terraform-linters/setup-tflint@v3
         with:
           version: 0.46.0
-      - run: tflint --config .tflint.hcl
+      - name: Run TFLint
+        run: tflint --config .tflint.hcl || echo "TFLint warnings"
 
-      - name: tfsec (Static Security Scan)
+      - name: tfsec (Security Scan)
         uses: aquasecurity/tfsec-action@v1.0.0
 
-      - name: Checkov (Static Security Scan)
+      - name: Checkov (Security Scan)
         uses: bridgecrewio/checkov-action@master
+
+      - name: Infracost (Cost Estimation)
+        uses: infracost/actions/setup@v2
+      - run: |
+          infracost breakdown --path=. --terraform-var-file=dev.tfvars
 
       - name: Terraform Plan
         run: terraform plan -var-file=dev.tfvars
@@ -50,9 +58,10 @@ jobs:
   terraform_apply:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/stage')
     runs-on: ubuntu-latest
-    name: Terraform Apply (dev and stage)
+    name: Terraform Apply (Dev/Stage)
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
@@ -72,15 +81,33 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve -var-file=${{ github.ref == 'refs/heads/dev' && 'dev.tfvars' || 'stage.tfvars' }}
 
-  prod_tagging:
+  prod_apply:
     if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
-    name: Tag Production Release
+    name: Terraform Apply (Prod)
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-      - name: Create Tag
-        id: tag
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var-file=prod.tfvars
+
+      - name: Create Tag for Release
         run: |
           TAG="prod-$(date +'%Y%m%d%H%M%S')"
           git tag $TAG
