@@ -1,0 +1,87 @@
+name: Terraform CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - 'feature/**'
+  push:
+    branches:
+      - dev
+      - stage
+      - prod
+
+jobs:
+  terraform_plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: Terraform Plan (on PR)
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+
+      - name: TFLint (Terraform linter)
+        uses: terraform-linters/setup-tflint@v3
+        with:
+          version: 0.46.0
+      - run: tflint --config .tflint.hcl
+
+      - name: tfsec (Static Security Scan)
+        uses: aquasecurity/tfsec-action@v1.0.0
+
+      - name: Checkov (Static Security Scan)
+        uses: bridgecrewio/checkov-action@master
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=dev.tfvars
+
+  terraform_apply:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/stage')
+    runs-on: ubuntu-latest
+    name: Terraform Apply (dev and stage)
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var-file=${{ github.ref == 'refs/heads/dev' && 'dev.tfvars' || 'stage.tfvars' }}
+
+  prod_tagging:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
+    runs-on: ubuntu-latest
+    name: Tag Production Release
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create Tag
+        id: tag
+        run: |
+          TAG="prod-$(date +'%Y%m%d%H%M%S')"
+          git tag $TAG
+          git push origin $TAG

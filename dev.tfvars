@@ -1,0 +1,6 @@
+resource_group_name = "dev-compliance-rg"
+vnet_name           = "dev-vnet"
+subnet_name         = "dev-subnet"
+vm_name             = "dev-vm"
+admin_username      = "azureadmin"
+admin_password      = "P@ssw0rd1234!" # Use Key Vault in real scenario
