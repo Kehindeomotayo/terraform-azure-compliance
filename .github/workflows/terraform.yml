@@ -2,14 +2,24 @@ name: Terraform CI/CD Pipeline
 
 on:
   pull_request:
-    branches:
-      - dev
+    branches: [dev]
+    paths: ['iac-setup/**'] # Only run if changes in iac-setup folder
   push:
     branches:
       - dev
       - stage
       - prod
-      - 'feature/**'
+    paths: ['iac-setup/**']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          - destroy
 
 jobs:
   terraform_plan:
@@ -26,12 +36,15 @@ jobs:
           terraform_version: 1.5.0
 
       - name: Terraform Init
+        working-directory: ./iac-setup
         run: terraform init
 
       - name: Terraform Validate
+        working-directory: ./iac-setup
         run: terraform validate
 
       - name: Check Terraform Formatting
+        working-directory: ./iac-setup
         run: terraform fmt -check
 
       - name: Install TFLint
@@ -40,26 +53,32 @@ jobs:
           version: 0.46.0
 
       - name: Run TFLint
+        working-directory: ./iac-setup
         run: tflint --config .tflint.hcl || echo "TFLint warnings"
 
       - name: tfsec (Security Scan)
         uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working-directory: ./iac-setup
 
       - name: Checkov (Security Scan)
         uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./iac-setup
 
       - name: Infracost (Cost Estimation)
         uses: infracost/actions/setup@v2
 
-      - run: infracost breakdown --path=. --terraform-var-file=dev.tfvars
+      - run: infracost breakdown --path=./iac-setup --terraform-var-file=dev.tfvars
 
       - name: Terraform Plan
+        working-directory: ./iac-setup
         run: terraform plan -var-file=dev.tfvars
 
-  terraform_apply_dev:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+  terraform_apply:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    name: Terraform Apply (Dev)
+    name: Terraform Apply (Dev/Stage/Prod)
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -77,64 +96,20 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform Init
+        working-directory: ./iac-setup
         run: terraform init
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve -var-file=dev.tfvars
+      - name: Terraform Apply or Destroy
+        working-directory: ./iac-setup
+        run: |
+          if [ "${{ github.event.inputs.action }}" == "destroy" ]; then
+            terraform destroy -auto-approve -var-file=$(basename $GITHUB_REF).tfvars || terraform destroy -auto-approve -var-file=dev.tfvars
+          else
+            terraform apply -auto-approve -var-file=$(basename $GITHUB_REF).tfvars || terraform apply -auto-approve -var-file=dev.tfvars
+          fi
 
-  terraform_apply_stage:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/stage'
-    runs-on: ubuntu-latest
-    name: Terraform Apply (Stage)
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.0
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve -var-file=stage.tfvars
-
-  terraform_apply_prod:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
-    runs-on: ubuntu-latest
-    name: Terraform Apply (Prod)
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.0
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Terraform Init
-        run: terraform init
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve -var-file=prod.tfvars
-
-      - name: Create Tag for Release
+      - name: Create Tag for Prod
+        if: github.ref == 'refs/heads/prod'
         run: |
           TAG="prod-$(date +'%Y%m%d%H%M%S')"
           git tag $TAG
