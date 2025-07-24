@@ -3,13 +3,13 @@ name: Terraform CI/CD Pipeline
 on:
   pull_request:
     branches:
-      - dev  # Run plan when PR is raised into dev
+      - dev
   push:
     branches:
-      - dev      # Deploy to Dev
-      - stage    # Deploy to Stage
-      - prod     # Deploy to Prod
-      - feature/** # Run checks when pushing to feature branches
+      - dev
+      - stage
+      - prod
+      - 'feature/**'
 
 jobs:
   terraform_plan:
@@ -38,6 +38,7 @@ jobs:
         uses: terraform-linters/setup-tflint@v3
         with:
           version: 0.46.0
+
       - name: Run TFLint
         run: tflint --config .tflint.hcl || echo "TFLint warnings"
 
@@ -49,16 +50,16 @@ jobs:
 
       - name: Infracost (Cost Estimation)
         uses: infracost/actions/setup@v2
-      - run: |
-          infracost breakdown --path=. --terraform-var-file=dev.tfvars
+
+      - run: infracost breakdown --path=. --terraform-var-file=dev.tfvars
 
       - name: Terraform Plan
         run: terraform plan -var-file=dev.tfvars
 
-  terraform_apply:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/stage')
+  terraform_apply_dev:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-    name: Terraform Apply (Dev/Stage)
+    name: Terraform Apply (Dev)
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -79,9 +80,35 @@ jobs:
         run: terraform init
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve -var-file=${{ github.ref == 'refs/heads/dev' && 'dev.tfvars' || 'stage.tfvars' }}
+        run: terraform apply -auto-approve -var-file=dev.tfvars
 
-  prod_apply:
+  terraform_apply_stage:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/stage'
+    runs-on: ubuntu-latest
+    name: Terraform Apply (Stage)
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var-file=stage.tfvars
+
+  terraform_apply_prod:
     if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
     name: Terraform Apply (Prod)
